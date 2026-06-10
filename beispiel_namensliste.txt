@@ -1,0 +1,12 @@
+# Beispiel-Namensliste
+# Format: "Nachname, Vorname"  oder  "Vorname Nachname"
+# Zeilen die mit # beginnen werden ignoriert.
+
+Müller, Max
+Meier, Anna
+Schmidt, Felix
+Weber, Lisa
+Fischer, Jonas
+Wagner, Sophie
+Becker, Luca
+Hoffmann, Mia
