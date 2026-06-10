@@ -29,6 +29,7 @@ jobs:
           --windowed
           --name "Punktesystem-Generator"
           --collect-all tkinterdnd2
+          --add-data "template_vorlage.ods;."
           punktesystem_generator.py
 
       - name: Als Artifact speichern

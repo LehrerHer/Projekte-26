@@ -1,20 +1,18 @@
 #!/usr/bin/env python3
 """
 Punktesystem-Generator
-Erzeugt befüllte ODS-Dateien für jeden Schüler aus einer Namensliste und ODS-Vorlage.
+Erzeugt befüllte ODS-Dateien für jeden Schüler aus einer Namensliste.
+Die ODS-Vorlage (template_vorlage.ods) ist direkt integriert.
 
-Platzhalter in der ODS-Vorlage:
-  {{Name}}     – vollständiger Name (wie in der Liste)
-  {{Klasse}}   – Klasse (aus dem Eingabefeld)
-  {{Vorname}}  – Vorname
-  {{Nachname}} – Nachname
-
-Namensformat in der Textdatei:
-  "Nachname, Vorname"  oder  "Vorname Nachname"
-  Zeilen, die mit # beginnen, werden ignoriert.
+Platzhalter in der Vorlage:
+  {{Name}}      – vollständiger Name (wie in der Liste)
+  {{Klasse}}    – Klasse
+  {{Vorname}}   – Vorname
+  {{Nachname}}  – Nachname
 """
 
 import os
+import sys
 import platform
 import subprocess
 from pathlib import Path
@@ -34,12 +32,19 @@ except ImportError:
     HAS_ODF = False
 
 
+def get_resource_path(filename: str) -> str:
+    """Pfad zu einer gebündelten Ressource (dev und PyInstaller-EXE)."""
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, filename)
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
+
+
 # ---------------------------------------------------------------------------
 # Hilfsfunktionen
 # ---------------------------------------------------------------------------
 
 def parse_name_list(filepath: str) -> list:
-    """Liest die Namensliste aus einer .txt-Datei (eine Name pro Zeile)."""
+    """Liest die Namensliste (eine Name pro Zeile, # = Kommentar)."""
     names = []
     with open(filepath, encoding="utf-8") as fh:
         for line in fh:
@@ -50,8 +55,7 @@ def parse_name_list(filepath: str) -> list:
 
 
 def split_name(full_name: str):
-    """Gibt (Vorname, Nachname) zurück.
-    Erkennt 'Nachname, Vorname' und 'Vorname Nachname'."""
+    """Gibt (Vorname, Nachname) zurück."""
     if "," in full_name:
         nachname, _, vorname = full_name.partition(",")
         return vorname.strip(), nachname.strip()
@@ -60,7 +64,7 @@ def split_name(full_name: str):
 
 
 def replace_in_node(node, replacements: dict):
-    """Ersetzt Platzhalter rekursiv in allen Textknoten eines ODF-Elements."""
+    """Ersetzt Platzhalter rekursiv in allen Textknoten."""
     if hasattr(node, "data") and isinstance(node.data, str):
         for old, new in replacements.items():
             node.data = node.data.replace(old, new)
@@ -83,14 +87,22 @@ def create_student_ods(template_path: str, output_path: str, name: str, klasse: 
 
 
 def safe_filename(s: str) -> str:
-    """Bereinigt einen String für die Verwendung als Dateiname."""
     for ch in r'\/:*?"<>|':
         s = s.replace(ch, "_")
     return s.strip()
 
 
+def get_output_base() -> Path:
+    """Gibt den Basisordner für die Ausgabe zurück (Desktop bevorzugt)."""
+    desktop = Path.home() / "Desktop"
+    if desktop.is_dir():
+        return desktop
+    if hasattr(sys, '_MEIPASS'):
+        return Path(sys.executable).parent
+    return Path(os.path.abspath(__file__)).parent
+
+
 def open_in_filemanager(path: str):
-    """Öffnet einen Ordner im nativen Dateimanager."""
     system = platform.system()
     if system == "Windows":
         os.startfile(path)
@@ -105,8 +117,6 @@ def open_in_filemanager(path: str):
 # ---------------------------------------------------------------------------
 
 class DropZone(tk.Frame):
-    """Drag-&-Drop-Feld mit Klick-Fallback zum Öffnen eines Dateidialogs."""
-
     _BG_IDLE   = "#e8f0fe"
     _BG_HOVER  = "#d0e4ff"
     _BG_LOADED = "#c8e6c9"
@@ -134,11 +144,8 @@ class DropZone(tk.Frame):
                 w.drop_target_register(DND_FILES)
                 w.dnd_bind("<<Drop>>", self._on_drop)
 
-    # -- event handlers --
-
     def _on_drop(self, event):
         path = event.data.strip()
-        # tkinterdnd2 wraps paths with spaces in braces
         if path.startswith("{") and path.endswith("}"):
             path = path[1:-1]
         self._load(path)
@@ -155,8 +162,6 @@ class DropZone(tk.Frame):
     def _on_leave(self, _event):
         if self._path is None:
             self._set_bg(self._BG_IDLE)
-
-    # -- helpers --
 
     def _load(self, path: str):
         self._path = path
@@ -183,25 +188,22 @@ _BaseWindow = TkinterDnD.Tk if HAS_DND else tk.Tk
 
 
 class App(_BaseWindow):
-    """Hauptfenster des Punktesystem-Generators."""
 
     def __init__(self):
         super().__init__()
         self.title("Punktesystem-Generator")
-        self.geometry("900x540")
-        self.minsize(720, 460)
+        self.geometry("820x460")
+        self.minsize(660, 400)
         self.configure(bg="#f5f5f5")
 
-        self._names:    list = []
-        self._tpl_path: str  = None
-        self._out_dir:  str  = None
+        self._names:         list = []
+        self._out_dir:       str  = None
+        self._template_path: str  = get_resource_path("template_vorlage.ods")
 
         self._build_ui()
-        self._check_dependencies()
+        self._check_startup()
 
-    # -- dependency check --
-
-    def _check_dependencies(self):
+    def _check_startup(self):
         missing = []
         if not HAS_DND:
             missing.append("tkinterdnd2  →  pip install tkinterdnd2  (Drag & Drop deaktiviert)")
@@ -212,16 +214,22 @@ class App(_BaseWindow):
                 "Fehlende Bibliotheken",
                 "Folgende Bibliotheken sind nicht installiert:\n\n" + "\n".join(missing),
             )
+        if not os.path.exists(self._template_path):
+            messagebox.showerror(
+                "Vorlage fehlt",
+                "template_vorlage.ods wurde nicht gefunden.\n"
+                "Bitte die Datei im gleichen Ordner wie das Programm ablegen.",
+            )
 
-    # -- UI construction --
+    # -- UI --
 
     def _build_ui(self):
         outer = tk.Frame(self, bg="#f5f5f5")
         outer.pack(fill="both", expand=True, padx=16, pady=14)
 
-        left  = tk.LabelFrame(outer, text=" Eingaben ",       bg="#f5f5f5",
+        left  = tk.LabelFrame(outer, text=" Eingaben ",      bg="#f5f5f5",
                                font=("Helvetica", 10, "bold"))
-        right = tk.LabelFrame(outer, text=" Ausgabe / Log ",  bg="#f5f5f5",
+        right = tk.LabelFrame(outer, text=" Ausgabe / Log ", bg="#f5f5f5",
                                font=("Helvetica", 10, "bold"))
         left.pack(side="left",  fill="both", expand=True, padx=(0, 8))
         right.pack(side="left", fill="both", expand=True, padx=(8, 0))
@@ -244,24 +252,13 @@ class App(_BaseWindow):
         self.dz_names.pack(fill="x", pady=(0, 2))
         self.lbl_names_info = self._small_label(f)
 
-        # 2. ODS-Vorlage
-        self._section_label(f, "2.  ODS-Vorlage  (.ods)")
-        self.dz_tpl = DropZone(
-            f,
-            prompt="Datei hier ablegen\noder klicken zum Öffnen",
-            filetypes=[("ODS-Tabellen", "*.ods"), ("Alle Dateien", "*.*")],
-            on_file=self._load_template,
-        )
-        self.dz_tpl.pack(fill="x", pady=(0, 2))
-        self.lbl_tpl_info = self._small_label(f)
-
-        # 3. Klasse
-        self._section_label(f, "3.  Klasse")
+        # 2. Klasse
+        self._section_label(f, "2.  Klasse")
         self.var_klasse = tk.StringVar()
         tk.Entry(f, textvariable=self.var_klasse, font=("Helvetica", 12)) \
-            .pack(fill="x", pady=(0, 16))
+            .pack(fill="x", pady=(0, 20))
 
-        # 4. Erstellen-Button
+        # 3. Button
         self.btn_create = tk.Button(
             f, text="Dateien erstellen",
             command=self._create_files,
@@ -284,8 +281,6 @@ class App(_BaseWindow):
             insertbackground="white", relief="flat",
         )
         self.log.pack(fill="both", expand=True)
-
-        # Farbige Log-Tags
         self.log.tag_config("ok",      foreground="#4ec9b0")
         self.log.tag_config("err",     foreground="#f48771")
         self.log.tag_config("info",    foreground="#9cdcfe")
@@ -304,8 +299,6 @@ class App(_BaseWindow):
         )
         self.btn_open.pack(fill="x", pady=(8, 0))
 
-    # -- widget helpers --
-
     @staticmethod
     def _section_label(parent, text: str):
         tk.Label(parent, text=text, bg="#f5f5f5", anchor="w",
@@ -317,8 +310,6 @@ class App(_BaseWindow):
                        anchor="w", font=("Helvetica", 8))
         lbl.pack(fill="x", pady=(0, 4))
         return lbl
-
-    # -- logging --
 
     def _log(self, msg: str, tag: str = ""):
         self.log.configure(state="normal")
@@ -339,34 +330,24 @@ class App(_BaseWindow):
         except Exception as exc:
             messagebox.showerror("Fehler beim Lesen der Namensliste", str(exc))
 
-    def _load_template(self, path: str):
-        self._tpl_path = path
-        fname = Path(path).name
-        self.dz_tpl.set_label(f"✓  {fname}")
-        self.lbl_tpl_info.configure(text=path)
-        self._log(f"Vorlage: {fname}", "info")
-
     # -- main action --
 
     def _create_files(self):
         if not self._names:
             messagebox.showwarning("Eingabe fehlt", "Bitte zuerst eine Namensliste laden.")
             return
-        if not self._tpl_path:
-            messagebox.showwarning("Eingabe fehlt", "Bitte zuerst eine ODS-Vorlage laden.")
-            return
         klasse = self.var_klasse.get().strip()
         if not klasse:
             messagebox.showwarning("Eingabe fehlt", "Bitte eine Klasse eingeben.")
             return
         if not HAS_ODF:
-            messagebox.showerror(
-                "odfpy fehlt",
-                "odfpy ist nicht installiert.\n\nInstallation:  pip install odfpy",
-            )
+            messagebox.showerror("odfpy fehlt", "odfpy ist nicht installiert.\n\npip install odfpy")
+            return
+        if not os.path.exists(self._template_path):
+            messagebox.showerror("Vorlage fehlt", "template_vorlage.ods wurde nicht gefunden.")
             return
 
-        out_dir = Path(self._tpl_path).parent / f"Ausgabe_{safe_filename(klasse)}"
+        out_dir = get_output_base() / f"Ausgabe_{safe_filename(klasse)}"
         out_dir.mkdir(exist_ok=True)
         self._out_dir = str(out_dir)
 
@@ -383,7 +364,7 @@ class App(_BaseWindow):
             filename = f"{safe_filename(klasse)}_{safe_filename(name)}.ods"
             dest = str(out_dir / filename)
             try:
-                create_student_ods(self._tpl_path, dest, name, klasse)
+                create_student_ods(self._template_path, dest, name, klasse)
                 self._log(f"  ✓  {filename}", "ok")
                 ok += 1
             except Exception as exc:
