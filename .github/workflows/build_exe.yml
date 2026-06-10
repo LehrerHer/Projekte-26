@@ -1,0 +1,51 @@
+name: Windows EXE erstellen
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Abhängigkeiten installieren
+        run: pip install tkinterdnd2 odfpy pyinstaller
+
+      - name: EXE erstellen
+        run: >
+          pyinstaller
+          --onefile
+          --windowed
+          --name "Punktesystem-Generator"
+          --collect-all tkinterdnd2
+          punktesystem_generator.py
+
+      - name: Als Artifact speichern
+        uses: actions/upload-artifact@v4
+        with:
+          name: Punktesystem-Generator-Windows
+          path: dist/Punktesystem-Generator.exe
+
+      - name: Release aktualisieren
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Continue'
+          gh release delete latest-build --yes 2>&1 | Out-Null
+          git push origin :refs/tags/latest-build 2>&1 | Out-Null
+          gh release create latest-build "dist\Punktesystem-Generator.exe" `
+            --title "Aktuelle Version" `
+            --notes "Windows-EXE herunterladen und doppelklicken – kein Python notwendig." `
+            --latest
