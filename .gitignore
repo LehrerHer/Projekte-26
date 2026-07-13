@@ -7,3 +7,7 @@ dist/
 build/
 .venv/
 venv/
+
+# Home Assistant Konfiguration enthaelt Zugangsdaten/Tokens - nicht committen
+raspberry-pi-home-automation/config/
+raspberry-pi-home-automation/.env
