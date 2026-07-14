@@ -4,6 +4,17 @@ Home Assistant per Docker auf dem bestehenden Raspberry Pi OS (Testbetrieb), um 
 Energiedaten von Hauptzähler, PV-Hauptanlage und beiden Balkonkraftwerken in einem
 Dashboard zu bündeln.
 
+## Status
+
+| Phase | Status |
+|---|---|
+| 1–3: Docker, Home Assistant, Shelly EM3 | ✅ erledigt |
+| 5: Balkonkraftwerke einbinden | ✅ erledigt (1 statt 2 Shelly Plugs, siehe Hinweis unten) |
+| Vorzeichen-Harmonisierung (Netzleistung) | ✅ per Template-Sensor gelöst, siehe [unten](#vorzeichen-harmonisieren-netzleistung) |
+| 6: Energie-Dashboard | ✅ erledigt (Einschränkung: Verbrauch wird unterschätzt, solange Phase 4 offen ist) |
+| 4: Huawei SUN2000 einbinden | ⏸ pausiert – Streit mit Liekam Haustechnik um eine Rechnung, kein Kontakt gewünscht. Bei Bedarf jederzeit nachholbar. |
+| Wallbox / evcc | 🔜 eigenes, späteres Projekt (siehe [unten](#nächster-möglicher-schritt-später-nicht-teil-dieser-anleitung)) |
+
 ## Ausgangslage
 
 - **Hardware:** Raspberry Pi 5, läuft mit Raspberry Pi OS – bleibt vorerst so, Home
@@ -22,7 +33,11 @@ Dashboard zu bündeln.
 
 ## Vorab zu besorgen
 
-- [ ] 2× Shelly Plug S oder Shelly Plug+ (für die Balkonkraftwerke)
+- [x] Shelly Plug S für die Balkonkraftwerke – da beide BKW an derselben
+      Mehrfachsteckdose hängen, reicht **ein** Plug an der Mehrfachsteckdose (misst die
+      Summe beider Wechselrichter). Elektrisch unproblematisch: 2× 800 W liegen weit
+      unter der 2500-W-Grenze des Plug S. Nachteil: keine Aufschlüsselung nach
+      einzelnem Balkonkraftwerk – bei Bedarf später mit einem zweiten Plug nachrüstbar.
 - [ ] Zugang zum Heim-WLAN/LAN-Router (Passwort griffbereit)
 - [ ] SSH-Zugang zum Pi (falls noch nicht aktiv: `sudo raspi-config` → Interface
       Options → SSH aktivieren)
@@ -84,7 +99,18 @@ keins vorhanden, kostenlos unter github.com anlegen).
 "Leistung Phase A/B/C", "Gesamt", "Energie" erscheinen. Werte mit der Shelly-App
 vergleichen – müssen übereinstimmen.
 
+Es gibt keinen automatischen Gesamt-Leistungssensor, nur die drei Phasen-Sensoren
+(`..._phase_a_leistung`, `..._phase_b_leistung`, `..._phase_c_leistung`) – die Summe
+bildet der Template-Sensor aus dem Abschnitt
+[Vorzeichen harmonisieren](#vorzeichen-harmonisieren-netzleistung).
+
 ## Phase 4: Huawei SUN2000 einbinden (Haupt-PV-Anlage)
+
+> **Aktuell pausiert.** Grund: laufender Streit mit Liekam Haustechnik um eine
+> Rechnung, daher aktuell kein Kontakt gewünscht (Installer-Zugang wird aber
+> voraussichtlich darüber benötigt). Diese Phase kann jederzeit nachgeholt werden,
+> sobald das geklärt ist – bis dahin läuft das Dashboard ohne die Hauptanlage weiter
+> (siehe Einschränkung in [Phase 6](#phase-6-energie-dashboard-einrichten-gesamtbilanz)).
 
 1. **Modbus TCP am Wechselrichter freischalten:** In der FusionSolar-Web-Oberfläche
    (fusionsolar.huawei.com im Browser, nicht die App) mit **Installer-Account**
@@ -109,31 +135,83 @@ FusionSolar-App funktioniert parallel weiter.
 Da der FoxESS M1-800-E Wechselrichter keine eigene Schnittstelle bietet, wird die
 AC-Ausgangsleistung direkt an der Steckdose gemessen.
 
-1. Je einen Shelly Plug S/Plus zwischen Wechselrichter-Netzstecker und Steckdose
-   stecken (2 Stück) und über die Shelly-App einmalig ins WLAN einbinden.
-2. Einstellungen → Geräte & Dienste → Integration hinzufügen → "Shelly" – beide neuen
-   Plugs sollten automatisch gefunden werden, jeweils bestätigen.
+**Umsetzung:** Beide Balkonkraftwerke hängen an derselben Mehrfachsteckdose, daher
+wurde nur **ein** Shelly Plug S zwischen Wand-Steckdose und Mehrfachsteckdose
+eingesetzt – er misst die Summe beider Wechselrichter (siehe Hinweis unter
+[Vorab zu besorgen](#vorab-zu-besorgen)).
 
-**Prüfen:** Sensoren "Leistung" und "Energie" je Plug erscheinen und stimmen mit der
-Solakon-App überein.
+1. Shelly Plug S zwischen Wand-Steckdose und Mehrfachsteckdose (an der beide BKW
+   hängen) stecken, über die Shelly-App einmalig ins WLAN einbinden.
+2. Einstellungen → Geräte & Dienste → Integration hinzufügen → "Shelly" – wurde
+   automatisch gefunden (Gerät: `shellyplusplugs-80646fd01aa0`, "Shelly Plug 1").
+
+**Geprüft:** Sensor `sensor.shellyplusplugs_80646fd01aa0_leistung` zeigt die
+kombinierte Leistung beider Balkonkraftwerke, bereits mit dem gewünschten Vorzeichen
+(positiv bei Produktion) – keine Anpassung nötig.
+
+## Vorzeichen harmonisieren (Netzleistung)
+
+Der Shelly EM3 zeigt Leistung mit **umgekehrtem** Vorzeichen im Vergleich zum Shelly
+Plug: negativ bei Produktion/Einspeisung, positiv bei Verbrauch/Bezug. Gewünscht war
+einheitlich: **+ = Produktion/Einspeisung, - = Verbrauch/Bezug** (passend zum Shelly
+Plug).
+
+**Versuch über die Shelly-Firmware (gescheitert):** Bei neueren Shelly-3EM-Generationen
+gibt es dafür einen `reverse`-Parameter pro Phase über die Geräte-API
+(`/settings/emeter/{0,1,2}?reverse=true`). Bei diesem Gerät (Modell `SHEM-3`, Firmware
+`v1.14.0`) existiert dieser Parameter **nicht** – `/settings` zeigt für jedes Emeter nur
+`name`, `appliance_type`, `max_power`, `range_extender`, kein `reverse`-Feld. Die
+CT-Zangen physisch umzudrehen wäre die einzige Hardware-Alternative, bedeutet aber
+Arbeiten im Sicherungskasten – daher stattdessen Softwarelösung in Home Assistant.
+
+**Lösung: Template-Sensor**, der die drei EM3-Phasen aufsummiert und invertiert:
+
+```yaml
+template:
+  - sensor:
+      - name: "Netzleistung"
+        unique_id: netzleistung
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        state: >
+          {{ (states('sensor.shellyem3_349454717c12_phase_a_leistung') | float(0)
+            + states('sensor.shellyem3_349454717c12_phase_b_leistung') | float(0)
+            + states('sensor.shellyem3_349454717c12_phase_c_leistung') | float(0)) * -1 }}
+```
+
+Ergebnis: `sensor.netzleistung` – positiv bei Netzeinspeisung/PV-Überschuss, negativ bei
+Netzbezug. Nach Anlegen des Sensors Home Assistant neu starten (`docker compose
+restart`).
 
 ## Phase 6: Energie-Dashboard einrichten (Gesamtbilanz)
 
 1. Einstellungen → Dashboards → Energie
-2. Unter "Stromnetz": Shelly-EM3-Sensor für Netzbezug UND Netzeinspeisung eintragen
-3. Unter "Solarproduktion": Huawei-PV-Sensor eintragen, dann erneut
-   "Solarproduktion hinzufügen" und die beiden Shelly-Plug-Sensoren
-   (Balkonkraftwerke) ebenfalls eintragen
-4. Speichern
+2. Unter "Stromnetz" → "Netzbezug hinzufügen": die drei EM3-Phasen-Energiesensoren
+   (`sensor.shellyem3_349454717c12_phase_{a,b,c}_energie`)
+3. Unter "Stromnetz" → "Netzeinspeisung hinzufügen": die drei EM3-Phasen-
+   Einspeisungssensoren (`sensor.shellyem3_349454717c12_phase_{a,b,c}_energieeinspeisung`)
+4. Unter "Solarproduktion" → "Solarproduktion hinzufügen":
+   `sensor.shellyplusplugs_80646fd01aa0_energie` (Balkonkraftwerke)
+5. Speichern
 
-Ab jetzt zeigt das Energie-Dashboard automatisch Gesamt-PV-Erzeugung (Hauptanlage +
-beide Balkonkraftwerke), Netzbezug/-einspeisung, Eigenverbrauchsquote fürs gesamte
-Haus sowie den Verlauf nach Tag/Woche/Monat/Jahr.
+> **Einschränkung, solange Phase 4 (Huawei) offen ist:** Home Assistant berechnet
+> "Verbrauch" intern als `Netzbezug + Solarproduktion - Netzeinspeisung`. Da die
+> Huawei-Hauptanlage (9,6 kWp) nicht als Solarproduktion eingetragen ist, fehlt deren
+> Eigenverbrauchsanteil in dieser Rechnung komplett – der angezeigte "Verbrauch" ist
+> dadurch systematisch zu niedrig, und zwar genau um den nicht erfassten
+> Huawei-Eigenverbrauch. Netzbezug/-einspeisung und Balkonkraftwerk-Produktion selbst
+> sind davon nicht betroffen und stimmen. Sobald Phase 4 nachgeholt wird, korrigiert
+> sich das automatisch für alle Daten ab dem Einbindungszeitpunkt – rückwirkend lässt
+> sich die Lücke nicht schließen (keine historischen Modbus-Daten vorhanden).
 
 ## Offene Punkte / bekannte Stolpersteine
 
 - **Installer-Zugang FusionSolar/EnergyOrb:** Falls nur Owner-Rechte vorhanden sind,
-  ist dieser Schritt der wahrscheinlichste Blocker – vorher klären.
+  ist dieser Schritt der wahrscheinlichste Blocker – vorher klären. Aktuell ohnehin
+  pausiert, siehe [Status](#status).
+- **Verbrauch im Energie-Dashboard zu niedrig**, solange Phase 4 offen ist – siehe
+  Hinweis in [Phase 6](#phase-6-energie-dashboard-einrichten-gesamtbilanz).
 - **Huawei-Systemumstellung:** Cloud-Verwaltung wechselt zum 15.07.2026 zu
   "Energy Orb" (Übergangsfrist bis 15.11.2026). Betrifft nur die Cloud/App, nicht die
   lokale Modbus-TCP-Verbindung. Falls die Modbus-TCP-Freischaltung (Phase 4.1) während
