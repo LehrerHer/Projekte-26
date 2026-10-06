@@ -24,6 +24,11 @@ from tkinter import filedialog, messagebox, ttk
 
 STIMME_NAME = "de_DE-thorsten-high.onnx"
 LOGDATEI = Path.home() / "Vertonen-Log.txt"
+# faulthandler braucht eine dauerhaft offene Datei (Referenz behalten, sonst wird sie geschlossen)
+try:
+    ABSTURZ_LOG = open(LOGDATEI, "a", buffering=1)
+except OSError:
+    ABSTURZ_LOG = None
 
 
 def log(meldung: str) -> None:
@@ -44,26 +49,34 @@ def finde_stimme() -> Path:
     raise FileNotFoundError(f"Stimmdatei {STIMME_NAME} nicht gefunden.")
 
 
+ERLAUBTE_ZEICHEN = set("äöüÄÖÜß„“”‚‘’–—…»«€§°²³·\n\r\t ")
+
+
+def unplausibel(text: str) -> int:
+    """Zaehlt Zeichen, die in einem deutschen Text ungewoehnlich sind."""
+    return sum(1 for z in text if not (z.isascii() or z in ERLAUBTE_ZEICHEN))
+
+
 def lese_text(pfad: Path) -> str:
-    """Liest eine Textdatei in UTF-8, UTF-16 oder Windows-Kodierung (cp1252)."""
+    """Liest eine Textdatei: UTF-8, UTF-16 oder (Windows- bzw. Mac-)Altkodierung."""
     daten = pfad.read_bytes()
     if daten.startswith((b"\xff\xfe", b"\xfe\xff")):
-        kodierungen = ("utf-16",)
+        text, kodierung = daten.decode("utf-16"), "utf-16"
     else:
-        kodierungen = ("utf-8-sig", "cp1252")
-    for kodierung in kodierungen:
         try:
-            text = daten.decode(kodierung)
-            log(f"Text gelesen als {kodierung}")
-            return text
+            text, kodierung = daten.decode("utf-8-sig"), "utf-8"
         except UnicodeDecodeError:
-            continue
-    raise ValueError("Die Textdatei konnte nicht gelesen werden (unbekannte Kodierung).")
+            kandidaten = {k: daten.decode(k, errors="replace") for k in ("cp1252", "mac_roman")}
+            kodierung = min(kandidaten, key=lambda k: unplausibel(kandidaten[k]))
+            text = kandidaten[kodierung]
+    log(f"Text gelesen als {kodierung}")
+    return text
 
 
 def vertone(quelle: Path, ziel: Path, tempo: float, melde=lambda text: None) -> None:
     melde("Stimme wird geladen …")
     log("Importiere piper")
+    import piper
     from piper import PiperVoice          # erst hier, damit das Fenster schnell erscheint
     import imageio_ffmpeg
 
@@ -72,6 +85,11 @@ def vertone(quelle: Path, ziel: Path, tempo: float, melde=lambda text: None) -> 
     voice = PiperVoice.load(stimme)
     text = lese_text(quelle)
     log(f"Stimme geladen, Text mit {len(text)} Zeichen")
+    log(f"piper: {Path(piper.__file__).parent}, espeak-Daten vorhanden: "
+        f"{(Path(piper.__file__).parent / 'espeak-ng-data').exists()}")
+    log(f"ffmpeg: {imageio_ffmpeg.get_ffmpeg_exe()}")
+    faulthandler.dump_traceback_later(60, repeat=True, file=ABSTURZ_LOG)
+    log("Beginne Sprachsynthese")
 
     with tempfile.TemporaryDirectory() as tmp:
         wav_pfad = Path(tmp) / "ausgabe.wav"
@@ -86,6 +104,7 @@ def vertone(quelle: Path, ziel: Path, tempo: float, melde=lambda text: None) -> 
                 saetze += 1
                 melde(f"Gesprochen: {saetze} Satz/Sätze …")
                 log(f"Satz {saetze} fertig")
+        faulthandler.cancel_dump_traceback_later()
         if saetze == 0:
             raise RuntimeError("Der Text enthält nichts zum Sprechen.")
 
@@ -161,9 +180,7 @@ class App(tk.Tk):
 
 
 if __name__ == "__main__":
-    try:
-        faulthandler.enable(open(LOGDATEI, "a"))   # Abstuerze (z. B. in onnxruntime) ins Log
-    except OSError:
-        pass
+    if ABSTURZ_LOG:
+        faulthandler.enable(ABSTURZ_LOG)   # Abstuerze (z. B. in onnxruntime) ins Log
     log("Programm gestartet")
     App().mainloop()
