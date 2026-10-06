@@ -11,6 +11,8 @@ Zum Testen mit Python:
 """
 
 import faulthandler
+import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -182,5 +184,17 @@ class App(tk.Tk):
 if __name__ == "__main__":
     if ABSTURZ_LOG:
         faulthandler.enable(ABSTURZ_LOG)   # Abstuerze (z. B. in onnxruntime) ins Log
+    # Ohne Terminal (Doppelklick) gibt es keine Konsole: Ausgaben von Piper/espeak/onnxruntime
+    # ins Log umleiten und SIGPIPE ignorieren, damit das Programm nicht still beendet wird.
+    if ABSTURZ_LOG and not (sys.stderr and sys.stderr.isatty()):
+        try:
+            os.dup2(ABSTURZ_LOG.fileno(), 1)
+            os.dup2(ABSTURZ_LOG.fileno(), 2)
+            sys.stdout = sys.stderr = ABSTURZ_LOG
+            log("Konsolenausgaben werden ins Log umgeleitet")
+        except OSError:
+            pass
+    if hasattr(signal, "SIGPIPE"):
+        signal.signal(signal.SIGPIPE, signal.SIG_IGN)
     log("Programm gestartet")
     App().mainloop()
