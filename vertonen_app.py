@@ -44,6 +44,23 @@ def finde_stimme() -> Path:
     raise FileNotFoundError(f"Stimmdatei {STIMME_NAME} nicht gefunden.")
 
 
+def lese_text(pfad: Path) -> str:
+    """Liest eine Textdatei in UTF-8, UTF-16 oder Windows-Kodierung (cp1252)."""
+    daten = pfad.read_bytes()
+    if daten.startswith((b"\xff\xfe", b"\xfe\xff")):
+        kodierungen = ("utf-16",)
+    else:
+        kodierungen = ("utf-8-sig", "cp1252")
+    for kodierung in kodierungen:
+        try:
+            text = daten.decode(kodierung)
+            log(f"Text gelesen als {kodierung}")
+            return text
+        except UnicodeDecodeError:
+            continue
+    raise ValueError("Die Textdatei konnte nicht gelesen werden (unbekannte Kodierung).")
+
+
 def vertone(quelle: Path, ziel: Path, tempo: float, melde=lambda text: None) -> None:
     melde("Stimme wird geladen …")
     log("Importiere piper")
@@ -53,7 +70,7 @@ def vertone(quelle: Path, ziel: Path, tempo: float, melde=lambda text: None) -> 
     stimme = finde_stimme()
     log(f"Lade Stimme: {stimme}")
     voice = PiperVoice.load(stimme)
-    text = quelle.read_text(encoding="utf-8")
+    text = lese_text(quelle)
     log(f"Stimme geladen, Text mit {len(text)} Zeichen")
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -133,7 +150,8 @@ class App(tk.Tk):
             self.after(0, lambda: self.fertig(f"Fertig: {ziel}"))
         except Exception as fehler:
             log("FEHLER:\n" + traceback.format_exc())
-            self.after(0, lambda: self.fertig(f"Fehler: {fehler}\nDetails: {LOGDATEI}", fehler=True))
+            meldung = f"Fehler: {fehler}\nDetails: {LOGDATEI}"
+            self.after(0, lambda: self.fertig(meldung, fehler=True))
 
     def fertig(self, meldung: str, fehler: bool = False) -> None:
         self.status.set(meldung)
