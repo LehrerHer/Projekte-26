@@ -1,0 +1,66 @@
+name: Vertonen-Programm bauen
+
+# Manuell starten: GitHub -> Actions -> "Vertonen-Programm bauen" -> Run workflow
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: Windows
+          - os: macos-latest
+            name: Mac
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Abhaengigkeiten installieren
+        shell: bash
+        run: python -m pip install piper-tts imageio-ffmpeg pyinstaller
+
+      - name: Stimme Thorsten herunterladen
+        shell: bash
+        run: |
+          mkdir voice
+          URL=https://huggingface.co/rhasspy/piper-voices/resolve/main/de/de_DE/thorsten/high
+          curl -L -f -o voice/de_DE-thorsten-high.onnx "$URL/de_DE-thorsten-high.onnx"
+          curl -L -f -o voice/de_DE-thorsten-high.onnx.json "$URL/de_DE-thorsten-high.onnx.json"
+
+      - name: Windows - eine einzelne EXE bauen
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          python -m PyInstaller --onefile --windowed --name Vertonen \
+            --collect-all piper --collect-all onnxruntime --collect-all imageio_ffmpeg \
+            --add-data "voice;voice" vertonen_app.py
+
+      - name: Mac - App bauen
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          python -m PyInstaller --windowed --name Vertonen \
+            --collect-all piper --collect-all onnxruntime --collect-all imageio_ffmpeg \
+            --add-data "voice:voice" vertonen_app.py
+          ditto -c -k --keepParent dist/Vertonen.app Vertonen-Mac.zip
+
+      - name: Hochladen (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vertonen-Windows
+          path: dist/Vertonen.exe
+
+      - name: Hochladen (Mac)
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vertonen-Mac
+          path: Vertonen-Mac.zip
