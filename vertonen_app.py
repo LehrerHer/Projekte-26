@@ -10,16 +10,29 @@ Zum Testen mit Python:
   python vertonen_app.py     (Stimme in ~/piper-voices/de_DE-thorsten-high.onnx)
 """
 
+import faulthandler
 import subprocess
 import sys
 import tempfile
 import threading
+import time
+import traceback
 import wave
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 STIMME_NAME = "de_DE-thorsten-high.onnx"
+LOGDATEI = Path.home() / "Vertonen-Log.txt"
+
+
+def log(meldung: str) -> None:
+    """Schreibt jeden Schritt mit Uhrzeit in ~/Vertonen-Log.txt (zur Fehlersuche)."""
+    try:
+        with open(LOGDATEI, "a", encoding="utf-8") as datei:
+            datei.write(f"{time.strftime('%H:%M:%S')}  {meldung}\n")
+    except OSError:
+        pass
 
 
 def finde_stimme() -> Path:
@@ -31,19 +44,36 @@ def finde_stimme() -> Path:
     raise FileNotFoundError(f"Stimmdatei {STIMME_NAME} nicht gefunden.")
 
 
-def vertone(quelle: Path, ziel: Path, tempo: float) -> None:
+def vertone(quelle: Path, ziel: Path, tempo: float, melde=lambda text: None) -> None:
+    melde("Stimme wird geladen …")
+    log("Importiere piper")
     from piper import PiperVoice          # erst hier, damit das Fenster schnell erscheint
     import imageio_ffmpeg
 
     stimme = finde_stimme()
-    text = quelle.read_text(encoding="utf-8")
+    log(f"Lade Stimme: {stimme}")
     voice = PiperVoice.load(stimme)
+    text = quelle.read_text(encoding="utf-8")
+    log(f"Stimme geladen, Text mit {len(text)} Zeichen")
 
     with tempfile.TemporaryDirectory() as tmp:
         wav_pfad = Path(tmp) / "ausgabe.wav"
+        saetze = 0
         with wave.open(str(wav_pfad), "wb") as wav:
-            voice.synthesize_wav(text, wav)
+            for chunk in voice.synthesize(text):
+                if saetze == 0:
+                    wav.setframerate(chunk.sample_rate)
+                    wav.setsampwidth(chunk.sample_width)
+                    wav.setnchannels(chunk.sample_channels)
+                wav.writeframes(chunk.audio_int16_bytes)
+                saetze += 1
+                melde(f"Gesprochen: {saetze} Satz/Sätze …")
+                log(f"Satz {saetze} fertig")
+        if saetze == 0:
+            raise RuntimeError("Der Text enthält nichts zum Sprechen.")
 
+        melde("MP3 wird erzeugt …")
+        log("Starte ffmpeg")
         befehl = [imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-loglevel", "error",
                   "-i", str(wav_pfad)]
         if tempo != 1.0:
@@ -52,6 +82,7 @@ def vertone(quelle: Path, ziel: Path, tempo: float) -> None:
         ergebnis = subprocess.run(befehl, capture_output=True, text=True)
         if ergebnis.returncode != 0:
             raise RuntimeError(f"ffmpeg ist fehlgeschlagen:\n{ergebnis.stderr}")
+    log(f"Fertig: {ziel}")
 
 
 class App(tk.Tk):
@@ -97,10 +128,12 @@ class App(tk.Tk):
 
     def arbeite(self, quelle: Path, ziel: Path, tempo: float) -> None:
         try:
-            vertone(quelle, ziel, tempo)
+            log(f"Start: {quelle} (Tempo {tempo})")
+            vertone(quelle, ziel, tempo, lambda text: self.after(0, lambda: self.status.set(text)))
             self.after(0, lambda: self.fertig(f"Fertig: {ziel}"))
         except Exception as fehler:
-            self.after(0, lambda: self.fertig(f"Fehler: {fehler}", fehler=True))
+            log("FEHLER:\n" + traceback.format_exc())
+            self.after(0, lambda: self.fertig(f"Fehler: {fehler}\nDetails: {LOGDATEI}", fehler=True))
 
     def fertig(self, meldung: str, fehler: bool = False) -> None:
         self.status.set(meldung)
@@ -110,4 +143,9 @@ class App(tk.Tk):
 
 
 if __name__ == "__main__":
+    try:
+        faulthandler.enable(open(LOGDATEI, "a"))   # Abstuerze (z. B. in onnxruntime) ins Log
+    except OSError:
+        pass
+    log("Programm gestartet")
     App().mainloop()
