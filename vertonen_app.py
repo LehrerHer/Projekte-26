@@ -12,6 +12,7 @@ Zum Testen mit Python:
 
 import faulthandler
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -59,6 +60,23 @@ def unplausibel(text: str) -> int:
     return sum(1 for z in text if not (z.isascii() or z in ERLAUBTE_ZEICHEN))
 
 
+def espeak_daten_ort(piper_ordner: Path) -> Path:
+    """Gibt einen lesbaren Ort fuer die espeak-Sprachdaten zurueck.
+
+    Unter macOS startet ein Doppelklick auf eine heruntergeladene App aus einer
+    schreibgeschuetzten Kopie (AppTranslocation); espeak findet dort seine Dateien nicht.
+    Deshalb werden die Daten einmalig in den Benutzerordner kopiert.
+    """
+    quelle = piper_ordner / "espeak-ng-data"
+    if not getattr(sys, "frozen", False):
+        return quelle
+    ziel = Path.home() / ".vertonen" / "espeak-ng-data"
+    if not (ziel / "phontab").exists():
+        log(f"Kopiere espeak-Daten nach {ziel}")
+        shutil.copytree(quelle, ziel, dirs_exist_ok=True)
+    return ziel
+
+
 def lese_text(pfad: Path) -> str:
     """Liest eine Textdatei: UTF-8, UTF-16 oder (Windows- bzw. Mac-)Altkodierung."""
     daten = pfad.read_bytes()
@@ -84,7 +102,9 @@ def vertone(quelle: Path, ziel: Path, tempo: float, melde=lambda text: None) -> 
 
     stimme = finde_stimme()
     log(f"Lade Stimme: {stimme}")
-    voice = PiperVoice.load(stimme)
+    espeak_daten = espeak_daten_ort(Path(piper.__file__).parent)
+    log(f"espeak-Daten: {espeak_daten}")
+    voice = PiperVoice.load(stimme, espeak_data_dir=espeak_daten)
     text = lese_text(quelle)
     log(f"Stimme geladen, Text mit {len(text)} Zeichen")
     log(f"piper: {Path(piper.__file__).parent}, espeak-Daten vorhanden: "
